@@ -1,0 +1,12 @@
+*.o
+*.so
+*.so.*
+examples/interactive
+examples/simple
+examples/screenshot
+tests/test_basic
+tests/test_send_delay
+tests/test_vi_edit
+python/__pycache__
+python/dist
+python/ptywrap.egg-info

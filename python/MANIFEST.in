@@ -1,0 +1,18 @@
+# Include documentation
+include README.md
+graft ../README.md
+graft ../LICENSE
+
+# Include examples
+include example.py
+
+# Include build configuration
+include pyproject.toml
+
+# Exclude build artifacts
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude *.so
+global-exclude *.o
+global-exclude .git*
