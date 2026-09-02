@@ -74,6 +74,19 @@ typedef struct {
 ptywrap_session_t* ptywrap_create(const char *container_id,
                                    int rows, int cols);
 
+/* Create new PTY session by running an application directly
+ *
+ * Args:
+ *   argv: NULL-terminated array of arguments (argv[0] is executable path/name)
+ *   rows: terminal height (default: 40 if 0)
+ *   cols: terminal width (default: 150 if 0)
+ *
+ * Returns:
+ *   Session handle on success, NULL on failure (errno set)
+ */
+ptywrap_session_t* ptywrap_create_direct(char *const argv[],
+                                          int rows, int cols);
+
 /* Destroy session and release resources
  *
  * Note: Does NOT stop the container (per requirements)
@@ -167,11 +180,23 @@ int ptywrap_get_row_text(ptywrap_session_t *session, int row,
 
 /* Status Queries */
 
+/* Check if the spawned process/container is still running
+ *
+ * Returns: 1 if running, 0 if exited, negative on error
+ */
+int ptywrap_process_alive(ptywrap_session_t *session);
+
 /* Check if container process is still running
  *
  * Returns: 1 if running, 0 if exited, negative on error
  */
 int ptywrap_container_alive(ptywrap_session_t *session);
+
+/* Get spawned process PID (for external monitoring)
+ *
+ * Returns: PID or negative error code
+ */
+pid_t ptywrap_get_process_pid(ptywrap_session_t *session);
 
 /* Get container PID (for external monitoring)
  *

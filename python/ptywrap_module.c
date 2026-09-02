@@ -38,17 +38,94 @@ PTYSession_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 static int
 PTYSession_init(PTYSessionObject *self, PyObject *args, PyObject *kwds)
 {
-    const char *container_id;
+    const char *container_id = NULL;
+    PyObject *command_obj = NULL;
     int rows = 0, cols = 0;
-    static char *kwlist[] = {"container_id", "rows", "cols", NULL};
+    static char *kwlist[] = {"container_id", "rows", "cols", "command", NULL};
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|ii", kwlist,
-                                     &container_id, &rows, &cols)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ziOi", kwlist,
+                                     &container_id, &rows, &cols, &command_obj)) {
         return -1;
     }
 
-    /* Create PTY session */
-    self->session = ptywrap_create(container_id, rows, cols);
+    if (container_id && command_obj) {
+        PyErr_SetString(PyExc_ValueError, "Cannot specify both container_id and command");
+        return -1;
+    }
+
+    if (!container_id && !command_obj) {
+        PyErr_SetString(PyExc_ValueError, "Must specify either container_id or command");
+        return -1;
+    }
+
+    if (container_id) {
+        /* Create PTY session attached to container */
+        self->session = ptywrap_create(container_id, rows, cols);
+    } else {
+        /* Parse command sequence */
+        if (!PySequence_Check(command_obj)) {
+            PyErr_SetString(PyExc_TypeError, "command must be a sequence of strings");
+            return -1;
+        }
+
+        Py_ssize_t size = PySequence_Size(command_obj);
+        if (size <= 0) {
+            PyErr_SetString(PyExc_ValueError, "command sequence cannot be empty");
+            return -1;
+        }
+
+        /* Allocate argv array */
+        char **argv = calloc(size + 1, sizeof(char *));
+        if (!argv) {
+            PyErr_NoMemory();
+            return -1;
+        }
+
+        for (Py_ssize_t i = 0; i < size; i++) {
+            PyObject *item = PySequence_GetItem(command_obj, i);
+            if (!item) {
+                for (Py_ssize_t j = 0; j < i; j++) free(argv[j]);
+                free(argv);
+                return -1;
+            }
+
+            PyObject *str_item = PyObject_Str(item);
+            Py_DECREF(item);
+            if (!str_item) {
+                for (Py_ssize_t j = 0; j < i; j++) free(argv[j]);
+                free(argv);
+                return -1;
+            }
+
+            const char *item_utf8 = PyUnicode_AsUTF8(str_item);
+            if (!item_utf8) {
+                Py_DECREF(str_item);
+                for (Py_ssize_t j = 0; j < i; j++) free(argv[j]);
+                free(argv);
+                return -1;
+            }
+
+            argv[i] = strdup(item_utf8);
+            Py_DECREF(str_item);
+            if (!argv[i]) {
+                for (Py_ssize_t j = 0; j < i; j++) free(argv[j]);
+                free(argv);
+                PyErr_NoMemory();
+                return -1;
+            }
+        }
+        argv[size] = NULL;
+
+        /* Create direct PTY session */
+        self->session = ptywrap_create_direct(argv, rows, cols);
+
+        /* Clean up argv */
+        for (Py_ssize_t i = 0; i < size; i++) {
+            free(argv[i]);
+        }
+        free(argv);
+    }
+
     if (self->session == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "Failed to create PTY session");
         return -1;
@@ -374,26 +451,28 @@ static PyGetSetDef PTYSession_getsetters[] = {
 static PyTypeObject PTYSessionType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "ptywrap.PTYSession",
-    .tp_doc = "PTYSession(container_id: str, rows: int = 0, cols: int = 0)\n\n"
-              "PTY session attached to a running container.\n\n"
+    .tp_doc = "PTYSession(container_id: str = None, rows: int = 0, cols: int = 0, command: list[str] = None)\n\n"
+              "PTY session attached to a running container or driving a local application directly.\n\n"
               "Creates a pseudo-terminal session that attaches to an existing\n"
-              "running container via 'podman exec -it'. The session provides\n"
-              "full VT100/ANSI terminal emulation with color and attribute support.\n\n"
+              "running container via 'podman exec -it', or runs a command directly inside the current\n"
+              "environment. The session provides full VT100/ANSI terminal emulation with color and\n"
+              "attribute support.\n\n"
               "Args:\n"
-              "    container_id: Container ID or name (must be running)\n"
+              "    container_id: Container ID or name (must be running). Do not specify if using 'command'.\n"
               "    rows: Terminal height (default: 40)\n"
-              "    cols: Terminal width (default: 150)\n\n"
-              "Example:\n"
+              "    cols: Terminal width (default: 150)\n"
+              "    command: Sequence of strings representing executable and arguments. Do not specify if using 'container_id'.\n\n"
+              "Example (container-based):\n"
               "    >>> session = PTYSession('mycontainer', rows=40, cols=150)\n"
               "    >>> session.send_line('ls -la')\n"
               "    >>> time.sleep(1)\n"
               "    >>> text = session.get_row_text(0)\n"
-              "    >>> print(text)\n"
-              "    >>> markdown = session.screenshot(0, 10)\n"
-              "    >>> print(markdown)\n\n"
-              "Note:\n"
-              "    The container must already be running. Use:\n"
-              "    podman run -d --name mycontainer alpine sleep 3600",
+              "    >>> print(text)\n\n"
+              "Example (direct application execution):\n"
+              "    >>> session = PTYSession(command=['/bin/sh', '-i'], rows=40, cols=150)\n"
+              "    >>> session.send_line('echo Hello')\n"
+              "    >>> time.sleep(1)\n"
+              "    >>> print(session.get_row_text(0))",
     .tp_basicsize = sizeof(PTYSessionObject),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,

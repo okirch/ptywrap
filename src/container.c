@@ -85,6 +85,56 @@ int container_attach(ptywrap_session_t *sess, const char *container_id) {
 }
 
 int container_exec_alive(ptywrap_session_t *sess) {
+    return process_pid_alive(sess);
+}
+
+int direct_spawn(ptywrap_session_t *sess, char *const argv[]) {
+    if (!sess || !argv || !argv[0] || !sess->slave_name) {
+        return PTYWRAP_ERR_INVAL;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        return PTYWRAP_ERR_CONTAINER;
+    }
+
+    if (pid == 0) {
+        /* Child process */
+
+        /* Close master fd (inherited from parent) */
+        close(sess->master_fd);
+
+        /* Open slave PTY and set it as stdin/stdout/stderr */
+        int slave_fd = open(sess->slave_name, O_RDWR);
+        if (slave_fd < 0) {
+            _exit(126);
+        }
+
+        dup2(slave_fd, STDIN_FILENO);
+        dup2(slave_fd, STDOUT_FILENO);
+        dup2(slave_fd, STDERR_FILENO);
+
+        if (slave_fd > 2) {
+            close(slave_fd);
+        }
+
+        /* Execute command directly, searching PATH */
+        execvp(argv[0], argv);
+
+        /* exec failed */
+        _exit(127);
+    }
+
+    /* Parent process */
+    sess->exec_pid = pid;
+
+    /* Give process a moment to start */
+    usleep(100000); /* 100ms */
+
+    return PTYWRAP_OK;
+}
+
+int process_pid_alive(ptywrap_session_t *sess) {
     if (!sess || sess->exec_pid <= 0) {
         return PTYWRAP_ERR_INVAL;
     }

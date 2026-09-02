@@ -36,13 +36,7 @@
 #include "reader.h"
 #include "screenshot.h"
 
-ptywrap_session_t* ptywrap_create(const char *container_id, int rows, int cols) {
-    if (!container_id) {
-        errno = EINVAL;
-        return NULL;
-    }
-
-    /* Use defaults if not specified */
+static ptywrap_session_t* ptywrap_session_alloc(int rows, int cols) {
     if (rows <= 0) rows = 40;
     if (cols <= 0) cols = 150;
 
@@ -64,18 +58,9 @@ ptywrap_session_t* ptywrap_create(const char *container_id, int rows, int cols) 
         return NULL;
     }
 
-    /* Store container ID */
-    sess->container_id = strdup(container_id);
-    if (!sess->container_id) {
-        pthread_mutex_destroy(&sess->buffer_lock);
-        free(sess);
-        return NULL;
-    }
-
     /* Create PTY */
     int ret = pty_create(sess);
     if (ret != PTYWRAP_OK) {
-        free(sess->container_id);
         pthread_mutex_destroy(&sess->buffer_lock);
         free(sess);
         return NULL;
@@ -85,14 +70,37 @@ ptywrap_session_t* ptywrap_create(const char *container_id, int rows, int cols) 
     ret = terminal_init(sess);
     if (ret != PTYWRAP_OK) {
         pty_close(sess);
-        free(sess->container_id);
+        pthread_mutex_destroy(&sess->buffer_lock);
+        free(sess);
+        return NULL;
+    }
+
+    return sess;
+}
+
+ptywrap_session_t* ptywrap_create(const char *container_id, int rows, int cols) {
+    if (!container_id) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    ptywrap_session_t *sess = ptywrap_session_alloc(rows, cols);
+    if (!sess) {
+        return NULL;
+    }
+
+    /* Store container ID */
+    sess->container_id = strdup(container_id);
+    if (!sess->container_id) {
+        terminal_free(sess);
+        pty_close(sess);
         pthread_mutex_destroy(&sess->buffer_lock);
         free(sess);
         return NULL;
     }
 
     /* Attach to existing container via podman exec */
-    ret = container_attach(sess, container_id);
+    int ret = container_attach(sess, container_id);
     if (ret != PTYWRAP_OK) {
         terminal_free(sess);
         pty_close(sess);
@@ -108,6 +116,42 @@ ptywrap_session_t* ptywrap_create(const char *container_id, int rows, int cols) 
         terminal_free(sess);
         pty_close(sess);
         free(sess->container_id);
+        pthread_mutex_destroy(&sess->buffer_lock);
+        free(sess);
+        return NULL;
+    }
+
+    return sess;
+}
+
+ptywrap_session_t* ptywrap_create_direct(char *const argv[], int rows, int cols) {
+    if (!argv || !argv[0]) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    ptywrap_session_t *sess = ptywrap_session_alloc(rows, cols);
+    if (!sess) {
+        return NULL;
+    }
+
+    sess->container_id = NULL;
+
+    /* Execute process directly */
+    int ret = direct_spawn(sess, argv);
+    if (ret != PTYWRAP_OK) {
+        terminal_free(sess);
+        pty_close(sess);
+        pthread_mutex_destroy(&sess->buffer_lock);
+        free(sess);
+        return NULL;
+    }
+
+    /* Start reader thread */
+    ret = reader_start(sess);
+    if (ret != PTYWRAP_OK) {
+        terminal_free(sess);
+        pty_close(sess);
         pthread_mutex_destroy(&sess->buffer_lock);
         free(sess);
         return NULL;
@@ -289,20 +333,28 @@ int ptywrap_get_row_text(ptywrap_session_t *session, int row,
     return (int)chars_to_copy;
 }
 
-int ptywrap_container_alive(ptywrap_session_t *session) {
+int ptywrap_process_alive(ptywrap_session_t *session) {
     if (!session) {
         return PTYWRAP_ERR_INVAL;
     }
 
-    return container_exec_alive(session);
+    return process_pid_alive(session);
 }
 
-pid_t ptywrap_get_container_pid(ptywrap_session_t *session) {
+int ptywrap_container_alive(ptywrap_session_t *session) {
+    return ptywrap_process_alive(session);
+}
+
+pid_t ptywrap_get_process_pid(ptywrap_session_t *session) {
     if (!session) {
         return PTYWRAP_ERR_INVAL;
     }
 
     return session->exec_pid;
+}
+
+pid_t ptywrap_get_container_pid(ptywrap_session_t *session) {
+    return ptywrap_get_process_pid(session);
 }
 
 char* ptywrap_screenshot_markdown(ptywrap_session_t *session,

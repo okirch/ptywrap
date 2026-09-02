@@ -34,9 +34,15 @@ $(REALNAME): $(OBJECTS)
 %.o: %.c $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+tests: $(REALNAME)
+	$(CC) -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -L. tests/test_basic.c -o tests/test_basic -lptywrap -pthread
+	$(CC) -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -L. tests/test_send_delay.c -o tests/test_send_delay -lptywrap -pthread
+	$(CC) -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -L. tests/test_vi_edit.c -o tests/test_vi_edit -lptywrap -pthread
+	$(CC) -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -L. tests/test_direct.c -o tests/test_direct -lptywrap -pthread
+
 clean:
 	rm -f $(OBJECTS) $(REALNAME) $(SONAME) $(TARGET)
-	rm -f tests/test_basic tests/test_integration
+	rm -f tests/test_basic tests/test_send_delay tests/test_vi_edit tests/test_direct
 	rm -f examples/simple examples/interactive
 
 install: $(REALNAME)
@@ -48,4 +54,4 @@ install: $(REALNAME)
 	install -m 444 include/ptywrap.h $(DESTROOT)$(INCDIR)
 	if [ -z "$(DESTROOT)" ]; then ldconfig; fi
 
-.PHONY: all clean install
+.PHONY: all clean install tests
